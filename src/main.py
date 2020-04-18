@@ -3,6 +3,10 @@ import psycopg2
 from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient, TopicPartition
 from kafka.admin import NewTopic
 import logging
+import aiopg
+import aiohttp
+from aiokafka import AIOKafkaProducer
+import ssl
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -82,6 +86,7 @@ def load_lines(file_name):
     with open(file_name) as f:
         return f.readlines()
 
+
 def do_postgres():
     with psycopg2.connect("postgres://@pg-1-petrglad-8b82.aivencloud.com:16066/defaultdb?sslmode=require",
                           password=load_lines('keys/pg/pg.key')[0].strip(),
@@ -89,7 +94,66 @@ def do_postgres():
                           ) as conn:
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE test (id serial PRIMARY KEY, num integer, data varchar);")
-            cur.execute("INSERT INTO test (num, data) VALUES (%s, %s)", (100, "abc'def"))
+            cur.execute("INSERT INTO test (num, data) VALUES (%s, %s)", (1, "dazzling"))
             cur.execute("SELECT * FROM test;")
             print(cur.fetchone())
             conn.commit()
+
+
+# ------------------------------------
+# Trying async versions
+
+async def postgres_go():
+    async with aiopg.create_pool("postgres://@pg-1-petrglad-8b82.aivencloud.com:16066/defaultdb?sslmode=require",
+                                 password=load_lines('keys/pg/pg.key')[0].strip(),
+                                 user="avnadmin", ) as pool:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM test")
+                await cur.execute("INSERT INTO test (num, data) VALUES (%s, %s)", (12, "dazzling"))
+                await cur.execute("SELECT * FROM test;")
+                ret = []
+                async for row in cur:
+                    ret.append(row)
+                print(ret)
+                assert ret == [(3, 12, 'dazzling')]
+
+
+async def http_go():
+    async with aiohttp.ClientSession() as session:
+        async with session.get('http://python.org') as response:
+            print("Status:", response.status)
+            print("Content-type:", response.headers['content-type'])
+            html = await response.text()
+            print("Body:", html[:15])
+
+
+async def kafka_go(loop):
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
+    ssl_context.check_hostname = True
+    ssl_context.load_verify_locations(cafile='keys/kafka/ca.pem')
+    ssl_context.load_cert_chain(certfile='keys/kafka/service.cert',
+                                keyfile='keys/kafka/service.key')
+    producer = AIOKafkaProducer(
+        loop=loop,
+        bootstrap_servers='kafka-1-petrglad-8b82.aivencloud.com:16068',
+        api_version="2.4.1",
+        security_protocol='SSL',
+        ssl_context=ssl_context,
+        client_id='webmon-1',
+        acks=1)
+    await producer.start()
+    try:
+        for k in range(5):
+            log.info(f"Sending #{k}")
+            await producer.send_and_wait("web_status", f'hello:{k}'.encode('utf-8'))
+    finally:
+        # Wait for all pending messages to be delivered or expire.
+        await producer.stop()
+
+
+loop = asyncio.get_event_loop()
+loop.run_until_complete(postgres_go())
+loop.run_until_complete(http_go())
+loop.run_until_complete(kafka_go(loop))

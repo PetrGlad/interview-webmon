@@ -1,2 +1,6 @@
 psycopg2
 kafka-python
+
+aiopg
+aiohttp
+aiokafka
