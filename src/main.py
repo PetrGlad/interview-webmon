@@ -5,8 +5,6 @@ from kafka.admin import NewTopic
 import logging
 import aiopg
 import aiohttp
-from aiokafka import AIOKafkaProducer
-import ssl
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -26,14 +24,14 @@ logging.basicConfig(level=logging.DEBUG)
 
 log = logging.getLogger(__name__)
 
+topic = 'web_status'
+
 
 def do_kafka():
-    topic = 'web_status'
     # kafka_config = {'bootstrap_servers': 'kafka-1-petrglad-8b82.aivencloud.com:16068',
     #                 'ssl_cafile': 'keys/kafka/ca.pem',
     #                 'ssl_certfile': 'keys/kafka/service.cert',
     #                 'ssl_keyfile': 'keys/kafka/service.key'}
-
     admin = KafkaAdminClient(bootstrap_servers='kafka-1-petrglad-8b82.aivencloud.com:16068',
                              api_version=(2, 4, 1),
                              security_protocol='SSL',
@@ -42,7 +40,8 @@ def do_kafka():
                              ssl_certfile='keys/kafka/service.cert',
                              ssl_keyfile='keys/kafka/service.key',
                              client_id='admin-1')
-    admin.create_topics([NewTopic(topic, 1, 3)])
+    if topic not in admin.list_topics():
+        admin.create_topics([NewTopic(topic, 1, 3)])
     admin.close()
 
     producer = KafkaProducer(
@@ -59,7 +58,8 @@ def do_kafka():
 
     for k in range(5):
         log.info(f"Sending #{k}")
-        producer.send(topic, value=f'hello:{k}'.encode('utf-8'))
+        x = producer.send(topic, value=f'hello:{k}'.encode('utf-8'))
+        print(x)
 
     log.info(f"Producer: bootstrap connected {producer.bootstrap_connected()}")
     log.info(
@@ -116,7 +116,7 @@ async def postgres_go():
                 async for row in cur:
                     ret.append(row)
                 print(ret)
-                assert ret == [(3, 12, 'dazzling')]
+                assert ret[0][1:] == (12, 'dazzling')
 
 
 async def http_go():
@@ -128,32 +128,9 @@ async def http_go():
             print("Body:", html[:15])
 
 
-async def kafka_go(loop):
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-    ssl_context.verify_mode = ssl.CERT_REQUIRED
-    ssl_context.check_hostname = True
-    ssl_context.load_verify_locations(cafile='keys/kafka/ca.pem')
-    ssl_context.load_cert_chain(certfile='keys/kafka/service.cert',
-                                keyfile='keys/kafka/service.key')
-    producer = AIOKafkaProducer(
-        loop=loop,
-        bootstrap_servers='kafka-1-petrglad-8b82.aivencloud.com:16068',
-        api_version="2.4.1",
-        security_protocol='SSL',
-        ssl_context=ssl_context,
-        client_id='webmon-1',
-        acks=1)
-    await producer.start()
-    try:
-        for k in range(5):
-            log.info(f"Sending #{k}")
-            await producer.send_and_wait("web_status", f'hello:{k}'.encode('utf-8'))
-    finally:
-        # Wait for all pending messages to be delivered or expire.
-        await producer.stop()
-
 
 loop = asyncio.get_event_loop()
 loop.run_until_complete(postgres_go())
 loop.run_until_complete(http_go())
-loop.run_until_complete(kafka_go(loop))
+do_kafka()
+# loop.run_until_complete(kafka_go(loop))

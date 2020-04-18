@@ -1,6 +1,6 @@
-psycopg2
 kafka-python
-
+# Released version of aiokafka requires (older) kafka-python 1.x. Not using it just now.
+# aiokafka
 aiopg
 aiohttp
-aiokafka
+
