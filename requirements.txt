@@ -4,3 +4,5 @@ kafka-python
 aiopg
 aiohttp
 
+toml==0.10.0
+promise==2.3

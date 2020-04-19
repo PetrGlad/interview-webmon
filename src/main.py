@@ -6,80 +6,21 @@ import logging
 import aiopg
 import aiohttp
 
-logging.basicConfig(level=logging.DEBUG)
+import toml
+import re
+import csv
+import json
+import time
 
-# async def g(ln):
-#     return ln + '!'
-#
-#
-# async def f(i):
-#     print('hello ' + await g(f'world #{i}'))
-#
-#
-# async def main():
-#     tasks = [asyncio.create_task(f(x)) for x in range(10000)]
-#     await asyncio.gather(*tasks)
+# from promise import Promise
+# import textwrap
 
-# asyncio.run(main())
-
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-topic = 'web_status'
 
-
-def do_kafka():
-    # kafka_config = {'bootstrap_servers': 'kafka-1-petrglad-8b82.aivencloud.com:16068',
-    #                 'ssl_cafile': 'keys/kafka/ca.pem',
-    #                 'ssl_certfile': 'keys/kafka/service.cert',
-    #                 'ssl_keyfile': 'keys/kafka/service.key'}
-    admin = KafkaAdminClient(bootstrap_servers='kafka-1-petrglad-8b82.aivencloud.com:16068',
-                             api_version=(2, 4, 1),
-                             security_protocol='SSL',
-                             ssl_check_hostname=True,
-                             ssl_cafile='keys/kafka/ca.pem',
-                             ssl_certfile='keys/kafka/service.cert',
-                             ssl_keyfile='keys/kafka/service.key',
-                             client_id='admin-1')
-    if topic not in admin.list_topics():
-        admin.create_topics([NewTopic(topic, 1, 3)])
-    admin.close()
-
-    producer = KafkaProducer(
-        bootstrap_servers='kafka-1-petrglad-8b82.aivencloud.com:16068',
-        api_version=(2, 4, 1),
-        security_protocol='SSL',
-        ssl_check_hostname=True,
-        ssl_cafile='keys/kafka/ca.pem',
-        ssl_certfile='keys/kafka/service.cert',
-        ssl_keyfile='keys/kafka/service.key',
-        client_id='status-logger-1',
-        acks=1)
-    log.info(" ================ Sender connected to broker.")
-
-    for k in range(5):
-        log.info(f"Sending #{k}")
-        x = producer.send(topic, value=f'hello:{k}'.encode('utf-8'))
-        print(x)
-
-    log.info(f"Producer: bootstrap connected {producer.bootstrap_connected()}")
-    log.info(
-        f"Producer: topic {topic} partitions {len(producer.partitions_for(topic))} - {producer.partitions_for(topic)}")
-    producer.close()
-
-    log.info(" ================ Receiver is connecting to broker.")
-    consumer = KafkaConsumer(bootstrap_servers='kafka-1-petrglad-8b82.aivencloud.com:16068',
-                             api_version=(2, 4, 1),
-                             security_protocol='SSL',
-                             ssl_check_hostname=True,
-                             ssl_cafile='keys/kafka/ca.pem',
-                             ssl_certfile='keys/kafka/service.cert',
-                             ssl_keyfile='keys/kafka/service.key',
-                             client_id='webmon-1b')
-    log.info(" ================ Receiver connected to broker.")
-    consumer.assign([TopicPartition(topic, 0)])
-    consumer.seek_to_beginning(TopicPartition(topic, 0))
-    for msg in consumer:
-        log.info(f" ================ Got message {msg}.")
+def parse_version(version_str):
+    return tuple([int(x) for x in version_str.split('.')])
 
 
 def load_lines(file_name):
@@ -87,50 +28,117 @@ def load_lines(file_name):
         return f.readlines()
 
 
-def do_postgres():
-    with psycopg2.connect("postgres://@pg-1-petrglad-8b82.aivencloud.com:16066/defaultdb?sslmode=require",
-                          password=load_lines('keys/pg/pg.key')[0].strip(),
-                          user="avnadmin",
-                          ) as conn:
-        with conn.cursor() as cur:
-            cur.execute("CREATE TABLE test (id serial PRIMARY KEY, num integer, data varchar);")
-            cur.execute("INSERT INTO test (num, data) VALUES (%s, %s)", (1, "dazzling"))
-            cur.execute("SELECT * FROM test;")
-            print(cur.fetchone())
-            conn.commit()
-
-
-# ------------------------------------
-# Trying async versions
-
-async def postgres_go():
-    async with aiopg.create_pool("postgres://@pg-1-petrglad-8b82.aivencloud.com:16066/defaultdb?sslmode=require",
-                                 password=load_lines('keys/pg/pg.key')[0].strip(),
-                                 user="avnadmin", ) as pool:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("DELETE FROM test")
-                await cur.execute("INSERT INTO test (num, data) VALUES (%s, %s)", (12, "dazzling"))
-                await cur.execute("SELECT * FROM test;")
-                ret = []
-                async for row in cur:
-                    ret.append(row)
-                print(ret)
-                assert ret[0][1:] == (12, 'dazzling')
-
-
-async def http_go():
+async def check_url(url, expect_regex):
     async with aiohttp.ClientSession() as session:
-        async with session.get('http://python.org') as response:
-            print("Status:", response.status)
-            print("Content-type:", response.headers['content-type'])
-            html = await response.text()
-            print("Body:", html[:15])
+        # Not following redirects
+        async with session.get(url) as response:
+            content = await response.text()
+            status = {'url': url,
+                      'code': response.status,
+                      'match': bool(re.search(expect_regex, content)),
+                      'timestamp': time.time()}
+            log.debug(f"New status {status}.")
+            return status
 
 
+async def http_checker(sites_config, web_status_topic, kafka_config):
+    sender = KafkaProducer(**kafka_config, client_id='status-logger-1', acks=1)
+
+    async def check(site):
+        status = await check_url(site['url'], site['expect_regex'])
+        sender.send(web_status_topic, value=json.dumps(status).encode('utf-8'))  # Note: blocking
+
+    for k in range(10):  # TODO Run until stopped instead
+        await asyncio.gather(*[check(site) for site in sites_config])
+        sender.flush()
+        await asyncio.sleep(6)
+    sender.close()
+
+
+def create_kafka_config(mq_config):
+    kafka_config = mq_config.copy()
+    kafka_config['api_version'] = parse_version(mq_config['api_version'])
+    kafka_config['security_protocol'] = 'SSL'
+    kafka_config['ssl_check_hostname'] = True
+    return kafka_config
+
+
+def configure_kafka_broker(kafka_config, topic):
+    admin = KafkaAdminClient(**kafka_config, client_id='admin-1')
+    if topic not in admin.list_topics():
+        admin.create_topics([NewTopic(topic, 1, 3)])
+    admin.close()
+
+
+def create_web_config(web_config):
+    with open(web_config['sites_list']) as f:
+        sites_data = csv.reader(f.readlines())
+        header = next(sites_data)
+        assert header == ['url', 'expect_regex'], "Sites CSV header is not \"url,expect_regex\"."
+        return [{'url': row[0], 'expect_regex': row[1]} for row in sites_data]
+
+
+web_status_table = 'web_status'
+
+
+async def setup_db(cursor):
+    try:
+        await cursor.execute(f"select 1 from {web_status_table}")
+    except Exception as ex:
+        await cursor.execute(f'''
+create table {web_status_table} (
+    timestamp timestamp not null,
+    url varchar(4096) not null,
+    code smallint not null, 
+    match bool,
+    primary key(timestamp, url)
+)
+''')
+
+
+# async def postgres_go(db_config):
+
+
+async def status_archiver(kafka_config, topic, db_config):
+    consumer = KafkaConsumer(**kafka_config, client_id='webmon-1')
+    consumer.assign([TopicPartition(topic, 0)])
+    partition_key = TopicPartition(topic='web-status', partition=0)
+    # consumer.seek_to_beginning(TopicPartition(topic, 0))
+    async with aiopg.create_pool(db_config['uri'],
+                                 password=load_lines(db_config['password_file'])[0].strip()) as pool:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cursor:
+                await setup_db(cursor)
+                while True:
+                    messages = consumer.poll()
+                    print(messages)
+                    if partition_key not in messages:
+                        await asyncio.sleep(2)
+                    else:
+                        for msg in messages[partition_key]:
+                            try:
+                                status: dict = json.loads(msg.value)
+                                log.info(f"Got message {status}.")
+                                await cursor.execute(
+                                    f"insert into {web_status_table} (timestamp, url, code, match) values (%s, %s, %s, %s)",
+                                    (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(status['timestamp'])),
+                                     status['url'],
+                                     status['code'],
+                                     status['match']))
+                            except Exception as ex:
+                                log.error("Cannot process incoming message % : %", msg, ex)
+
+
+config = toml.load('config/config.toml')
+
+kafka_config = create_kafka_config(config['mq'])
+web_status_topic = 'web-status'
+configure_kafka_broker(kafka_config, web_status_topic)
+
+sites_config = create_web_config(config['web'])
 
 loop = asyncio.get_event_loop()
-loop.run_until_complete(postgres_go())
-loop.run_until_complete(http_go())
-do_kafka()
-# loop.run_until_complete(kafka_go(loop))
+loop.run_until_complete(asyncio.gather(
+    http_checker(sites_config, web_status_topic, kafka_config),
+    status_archiver(kafka_config, web_status_topic, config['db'])
+))

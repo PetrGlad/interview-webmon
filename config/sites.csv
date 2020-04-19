@@ -1,0 +1,3 @@
+url,expect_regex
+"http://python.org","<body"
+"http://example.com",""
