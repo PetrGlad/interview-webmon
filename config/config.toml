@@ -1,13 +1,13 @@
-[db]
+[db] # POstgreSQL connection parameters
 uri = "postgres://avnadmin@pg-1-petrglad-8b82.aivencloud.com:16066/defaultdb?sslmode=require"
-password_file = 'keys/pg/pg.key'
+password_file = 'config/keys/pg/pg.key'
 
-[mq]
+[mq] # Kafka connection parameters
 bootstrap_servers = "kafka-1-petrglad-8b82.aivencloud.com:16068"
 api_version = "2.4.1"
-ssl_cafile = 'keys/kafka/ca.pem'
-ssl_certfile = 'keys/kafka/service.cert'
-ssl_keyfile = 'keys/kafka/service.key'
+ssl_cafile = 'config/keys/kafka/ca.pem'
+ssl_certfile = 'config/keys/kafka/service.cert'
+ssl_keyfile = 'config/keys/kafka/service.key'
 
 [web]
 sites_list = "config/sites.csv"

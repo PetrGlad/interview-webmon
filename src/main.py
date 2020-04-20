@@ -1,5 +1,4 @@
 import asyncio
-import psycopg2
 from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient, TopicPartition
 from kafka.admin import NewTopic
 import logging
@@ -11,9 +10,6 @@ import re
 import csv
 import json
 import time
-
-# from promise import Promise
-# import textwrap
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)

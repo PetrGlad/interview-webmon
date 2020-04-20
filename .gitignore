@@ -1,5 +1,5 @@
+config/keys
 venv
 .idea
 *.iml
-keys
 
