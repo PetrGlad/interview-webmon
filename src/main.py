@@ -26,11 +26,12 @@ def load_lines(file_name):
 
 async def check_url(url, expect_regex):
     async with aiohttp.ClientSession() as session:
-        # Not following redirects
-        async with session.get(url) as response:
+        start_at = time.time()
+        async with session.get(url) as response:  # Not following redirects
             content = await response.text()
             status = {'url': url,
                       'code': response.status,
+                      'duration': time.time() - start_at,
                       'match': bool(re.search(expect_regex, content)),
                       'timestamp': time.time()}
             log.debug(f"New status {status}.")
@@ -42,13 +43,15 @@ async def http_checker(sites_config, web_status_topic, kafka_config):
 
     async def check(site):
         status = await check_url(site['url'], site['expect_regex'])
-        sender.send(web_status_topic, value=json.dumps(status).encode('utf-8'))  # Note: blocking
+        sender.send(web_status_topic, value=json.dumps(status).encode('utf-8'))  # Note: this is blocking
 
-    for k in range(10):  # TODO Run until stopped instead
-        await asyncio.gather(*[check(site) for site in sites_config])
-        sender.flush()
-        await asyncio.sleep(6)
-    sender.close()
+    try:
+        while True:  # Until the process is interrupted
+            await asyncio.gather(*[check(site) for site in sites_config])
+            sender.flush()
+            await asyncio.sleep(6)
+    finally:
+        sender.close()
 
 
 def create_kafka_config(mq_config):
@@ -71,7 +74,9 @@ def create_web_config(web_config):
         sites_data = csv.reader(f.readlines())
         header = next(sites_data)
         assert header == ['url', 'expect_regex'], "Sites CSV header is not \"url,expect_regex\"."
-        return [{'url': row[0], 'expect_regex': row[1]} for row in sites_data]
+        sites = [{'url': row[0], 'expect_regex': row[1]} for row in sites_data]
+        # TODO Assert no duplicate URLs here (duplicate results violate primary key)
+        return sites
 
 
 web_status_table = 'web_status'
@@ -85,7 +90,8 @@ async def setup_db(cursor):
 create table {web_status_table} (
     timestamp timestamp not null,
     url varchar(4096) not null,
-    code smallint not null, 
+    code smallint not null,
+    duration float not null,
     match bool,
     primary key(timestamp, url)
 )
@@ -98,10 +104,11 @@ async def store_batch(cursor, messages):
             status: dict = json.loads(msg.value)
             log.info(f"Got status {status}.")
             await cursor.execute(
-                f"insert into {web_status_table} (timestamp, url, code, match) values (%s, %s, %s, %s)",
+                f"insert into {web_status_table} (timestamp, url, code, duration, match) values (%s, %s, %s, %s, %s)",
                 (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(status['timestamp'])),
                  status['url'],
                  status['code'],
+                 status['duration'],
                  status['match']))
         except Exception as ex:
             log.error("Cannot process incoming message % : %", msg, ex)
