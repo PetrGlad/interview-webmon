@@ -1,3 +1,4 @@
 url,expect_regex
 "http://python.org","<body"
 "http://example.com",""
+"http://example.com/example",""

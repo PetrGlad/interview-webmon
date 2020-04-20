@@ -96,37 +96,46 @@ create table {web_status_table} (
 ''')
 
 
-# async def postgres_go(db_config):
+async def store_batch(cursor, messages):
+    for msg in messages:
+        try:
+            status: dict = json.loads(msg.value)
+            log.info(f"Got status {status}.")
+            await cursor.execute(
+                f"insert into {web_status_table} (timestamp, url, code, match) values (%s, %s, %s, %s)",
+                (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(status['timestamp'])),
+                 status['url'],
+                 status['code'],
+                 status['match']))
+        except Exception as ex:
+            log.error("Cannot process incoming message % : %", msg, ex)
+
+
+async def with_db_connection(db_config, proc):
+    async with aiopg.create_pool(
+            db_config['uri'],
+            password=load_lines(db_config['password_file'])[0].strip()) as pool:
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cursor:
+                await setup_db(cursor)
+                await proc(cursor)
 
 
 async def status_archiver(kafka_config, topic, db_config):
     consumer = KafkaConsumer(**kafka_config, client_id='webmon-1')
     consumer.assign([TopicPartition(topic, 0)])
     partition_key = TopicPartition(topic='web-status', partition=0)
-    # consumer.seek_to_beginning(TopicPartition(topic, 0))
-    async with aiopg.create_pool(db_config['uri'],
-                                 password=load_lines(db_config['password_file'])[0].strip()) as pool:
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cursor:
-                await setup_db(cursor)
-                while True:
-                    messages = consumer.poll()
-                    print(messages)
-                    if partition_key not in messages:
-                        await asyncio.sleep(2)
-                    else:
-                        for msg in messages[partition_key]:
-                            try:
-                                status: dict = json.loads(msg.value)
-                                log.info(f"Got message {status}.")
-                                await cursor.execute(
-                                    f"insert into {web_status_table} (timestamp, url, code, match) values (%s, %s, %s, %s)",
-                                    (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(status['timestamp'])),
-                                     status['url'],
-                                     status['code'],
-                                     status['match']))
-                            except Exception as ex:
-                                log.error("Cannot process incoming message % : %", msg, ex)
+
+    async def store_loop(cursor):
+        while True:
+            messages = consumer.poll()
+            if partition_key not in messages:
+                await asyncio.sleep(2)
+            else:
+                messages = messages[partition_key]
+                await store_batch(cursor, messages)
+
+    await with_db_connection(db_config, store_loop)
 
 
 config = toml.load('config/config.toml')
