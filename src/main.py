@@ -38,7 +38,7 @@ async def check_url(url, expect_regex):
             return status
 
 
-async def http_checker(sites_config, web_status_topic, kafka_config):
+async def http_checker(sites_config, delay, web_status_topic, kafka_config):
     sender = KafkaProducer(**kafka_config, client_id='status-logger-1', acks=1)
 
     async def check(site):
@@ -49,7 +49,7 @@ async def http_checker(sites_config, web_status_topic, kafka_config):
         while True:  # Until the process is interrupted
             await asyncio.gather(*[check(site) for site in sites_config])
             sender.flush()
-            await asyncio.sleep(6)
+            await asyncio.sleep(delay)
     finally:
         sender.close()
 
@@ -141,16 +141,18 @@ async def status_archiver(kafka_config, topic, db_config):
     await with_db_connection(db_config, store_loop)
 
 
-config = toml.load('config/config.toml')
+if __name__ == '__main__':
+    config = toml.load('config/config.toml')
 
-kafka_config = create_kafka_config(config['mq'])
-web_status_topic = 'web-status'
-configure_kafka_broker(kafka_config, web_status_topic)
+    kafka_config = create_kafka_config(config['mq'])
+    web_status_topic = 'web-status'
+    configure_kafka_broker(kafka_config, web_status_topic)
 
-sites_config = create_web_config(config['web'])
+    sites_config = create_web_config(config['web'])
+    delay = config['web']['delay_s']
 
-loop = asyncio.get_event_loop()
-loop.run_until_complete(asyncio.gather(
-    http_checker(sites_config, web_status_topic, kafka_config),
-    status_archiver(kafka_config, web_status_topic, config['db'])
-))
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(asyncio.gather(
+        http_checker(sites_config, delay, web_status_topic, kafka_config),
+        status_archiver(kafka_config, web_status_topic, config['db'])
+    ))

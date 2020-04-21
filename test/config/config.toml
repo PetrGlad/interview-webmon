@@ -10,5 +10,5 @@ ssl_certfile = 'config/keys/kafka/service.cert'
 ssl_keyfile = 'config/keys/kafka/service.key'
 
 [web]
-delay_s = 15
+delay_s = 2
 sites_list = "config/sites.csv"

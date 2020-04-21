@@ -2,4 +2,4 @@
 set -ex
 
 docker build --tag webmon .
-docker run --rm --name werbmon webmon
+docker run --rm --name webmon --volume config:/app/config webmon

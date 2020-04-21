@@ -10,6 +10,7 @@ RUN apk add postgresql-libs \
  && apk --purge del .build-deps
 
 COPY src ./src
-COPY config/ config/
+
+VOLUME /app/config
 
 CMD python ./src/main.py

@@ -2,4 +2,5 @@ config/keys
 venv
 .idea
 *.iml
+test/test_config
 
