@@ -1,16 +1,15 @@
 import asyncio
-
-from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient, TopicPartition
-from kafka.admin import NewTopic
-import logging
-import aiopg
-import aiohttp
-
-import toml
-import re
 import csv
 import json
+import logging
+import re
 import time
+
+import aiohttp
+import aiopg
+import toml
+from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient, TopicPartition
+from kafka.admin import NewTopic
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -29,15 +28,23 @@ async def check_url(url, expect_regex, delay):
     async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=min(delay, 10.0))) as session:
         start_at = time.time()
-        async with session.get(url) as response:  # Not following redirects
-            content = await response.text()
-            status = {'url': url,
-                      'code': response.status,
-                      'duration': time.time() - start_at,
-                      'match': bool(re.search(expect_regex, content)),
-                      'timestamp': time.time()}
-            log.debug(f"New status {status}.")
-            return status
+        try:
+            async with session.get(url) as response:  # Not following redirects
+                content = await response.text()
+                status = {'url': url,
+                          'code': response.status,
+                          'duration': time.time() - start_at,
+                          'match': bool(re.search(expect_regex, content)),
+                          'timestamp': time.time()}
+                log.debug(f"New status {status}.")
+                return status
+        except Exception as ex:
+            log.info(f"Probe exception for \"{url}\": {ex}.")
+            return {'url': url,
+                    'code': 0,
+                    'duration': time.time() - start_at,
+                    'match': False,
+                    'timestamp': time.time()}
 
 
 async def http_checker(sites_config, delay, web_status_topic, kafka_config):
@@ -76,7 +83,9 @@ def create_web_config(web_config):
         sites_data = csv.reader(f.readlines())
         header = next(sites_data)
         assert header == ['url', 'expect_regex'], "Sites CSV header is not \"url,expect_regex\"."
-        sites = [{'url': row[0], 'expect_regex': row[1]} for row in sites_data]
+        sites = [{'url': row[0], 'expect_regex': row[1]}
+                 for row in sites_data
+                 if len(row) > 0]  # Ignore empty rows
         # TODO Assert no duplicate URLs here (duplicate results violate primary key)
         return sites
 
@@ -123,7 +132,7 @@ async def with_db_connection(db_config, proc):
         async with pool.acquire() as conn:
             async with conn.cursor() as cursor:
                 await setup_db(cursor)
-                await proc(cursor)
+                return await proc(cursor)
 
 
 async def status_archiver(kafka_config, topic, db_config):

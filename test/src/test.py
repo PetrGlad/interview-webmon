@@ -1,10 +1,15 @@
-from flask import Flask
+import sys
 import time
 from multiprocessing import Process
+from pprint import pprint
+
 import psycopg2
 import toml
+from flask import Flask
 
 app = Flask(__name__)
+
+SLOW_DELAY = 1.0
 
 
 @app.route('/hello')
@@ -19,8 +24,14 @@ def route_fast():
 
 @app.route('/slow')
 def route_slow():
-    time.sleep(1)
+    time.sleep(SLOW_DELAY)
     return 'slow'
+
+
+@app.route('/never')
+def route_never():
+    time.sleep(SLOW_DELAY * 5)
+    return 'never'
 
 
 # TODO DRY, Share db and config code with main ...
@@ -33,32 +44,52 @@ def with_db_connection(db_config, proc):
     with psycopg2.connect(db_config['uri'],
                           password=load_lines(db_config['password_file'])[0].strip()) as conn:
         with conn.cursor() as cur:
-            proc(cur)
+            return proc(cur)
+
+
+def normalize_status(row):
+    """Return (url, http_status, slow?, content_match?)"""
+    if row[1] == 0:
+        assert not row[3]
+        return row[0], 0, True, False
+    else:
+        return row[0], row[1], row[2] >= SLOW_DELAY, row[3]
 
 
 def test_proc(db_config, delay):
     print("Awaiting probes.")
-    time.sleep(delay * 3 + 5)  # 2 cycles + some time for in-flight messages to settle
+    start_at = time.time()
+    time.sleep(delay * 3 + 7)  # 2 cycles + some time for in-flight messages to settle
 
     def check_statuses(cur):
         print("Checking db results.")
-        cur.execute("SELECT timestamp, url, code, duration, match FROM web_status;")
-        print(cur.fetchone())
-        for row in cur:
-            print(row)
+        cur.execute("SELECT url, code, duration, match FROM web_status where timestamp >= %s",
+                    (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_at)),))
+        rows = [row for row in cur]
+        print(f"Received {len(rows)} records.")
+        results = set([normalize_status(r) for r in rows])
+        print("Normalized results:")
+        pprint(results)
+        return results == {('http://10.0.0.5:12321/fast', 0, True, False),  # No connection
+                           ('http://10.0.0.5:8080/fast', 200, False, True),  # OK
+                           ('http://10.0.0.5:8080/hello', 200, False, False),  # Content mismatch
+                           ('http://10.0.0.5:8080/never', 0, True, False),  # Timeout
+                           ('http://10.0.0.5:8080/newverland', 404, False, False),  # 404
+                           ('http://10.0.0.5:8080/slow', 200, True, True)  # Slow
+                           }
 
-    # print(os.listdir('/app/config'))
-    with_db_connection(db_config, check_statuses)
+    return with_db_connection(db_config, check_statuses)
 
 
 if __name__ == '__main__':
-    print(load_lines('config/config.toml'))
-    print(load_lines('/app/config/config.toml'))
     config = toml.load('config/config.toml')
-    print(config)
-    flask = Process(target=app.run)
+    flask = Process(target=lambda: app.run(host='10.0.0.5', port=8080))
     try:
         flask.start()
-        test_proc(config['db'], config['web']['delay_s'])
+        if test_proc(config['db'], config['web']['delay_s']):
+            print("\nTest passed.\n")
+        else:
+            print("\nTest failed.\n")
+            sys.exit(1)
     finally:
         flask.terminate()

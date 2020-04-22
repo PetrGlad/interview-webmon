@@ -1,7 +1,7 @@
 #!/bin/bash
 set -ex
 
-docker build --tag webmon:test .
+docker build --tag webmon:sample .
 
 cd test
 
@@ -9,6 +9,7 @@ docker build --tag webmon-test .
 
 cleanup() {
   docker rm --force webmon-sample || true
+  docker network remove webmon-sandbox || true
 }
 trap cleanup EXIT
 
@@ -16,5 +17,18 @@ trap cleanup EXIT
 cp -r ../config/keys ./test_config/
 cp ./config/* ./test_config/
 
-docker run --detach --name webmon-sample --volume "$(pwd)/test_config":/app/config webmon:test
-docker run --rm --name webmon-test --volume "$(pwd)/test_config":/app/config webmon-test
+docker network create --subnet=10.0.0.0/8 webmon-sandbox
+docker run \
+  --detach \
+  --name webmon-sample \
+  --volume "$(pwd)/test_config":/app/config \
+  --ip 10.0.0.3 \
+  --network webmon-sandbox \
+  webmon:sample
+docker run \
+  --rm \
+  --name webmon-test \
+  --volume "$(pwd)/test_config":/app/config \
+  --ip 10.0.0.5 \
+  --network webmon-sandbox \
+  webmon-test
