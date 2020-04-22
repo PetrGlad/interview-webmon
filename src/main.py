@@ -1,4 +1,5 @@
 import asyncio
+
 from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient, TopicPartition
 from kafka.admin import NewTopic
 import logging
@@ -24,8 +25,9 @@ def load_lines(file_name):
         return f.readlines()
 
 
-async def check_url(url, expect_regex):
-    async with aiohttp.ClientSession() as session:
+async def check_url(url, expect_regex, delay):
+    async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=min(delay, 10.0))) as session:
         start_at = time.time()
         async with session.get(url) as response:  # Not following redirects
             content = await response.text()
@@ -42,7 +44,7 @@ async def http_checker(sites_config, delay, web_status_topic, kafka_config):
     sender = KafkaProducer(**kafka_config, client_id='status-logger-1', acks=1)
 
     async def check(site):
-        status = await check_url(site['url'], site['expect_regex'])
+        status = await check_url(site['url'], site['expect_regex'], delay)
         sender.send(web_status_topic, value=json.dumps(status).encode('utf-8'))  # Note: this is blocking
 
     try:
