@@ -1,6 +1,7 @@
 config/keys
+test/test_config
+
 venv
 .idea
 *.iml
-test/test_config
-
+__pycache__

@@ -1,7 +1,7 @@
 url,expect_regex
 "http://10.0.0.5:12321/fast",""
 "http://10.0.0.5:8080/fast","fast"
-"http://10.0.0.5:8080/slow","slow"
+"http://10.0.0.5:8080/fast","fast"
 "http://10.0.0.5:8080/slow","slow"
 "http://10.0.0.5:8080/never","never"
 "http://10.0.0.5:8080/newverland","never"

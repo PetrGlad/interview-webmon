@@ -10,8 +10,8 @@ the time it took the web server to respond, and timestamp of the test.
 ## Configuration
 
 All configuration files are in `./config` directory.
-Modify `config/config.toml` before building the container.
-The required files layout is
+Review `config/config.toml` before building the container.
+The required files' layout is
 ```
 config
 ├── config.toml # The configuration file, look inside for hints
@@ -23,8 +23,12 @@ config
 │   └── pg 
 │       ├── ca.pem # service CA
 │       └── pg.key # contains password on the first line, whitespace is trimmed
-└── sites.csv # List of sites to test
+└── sites.csv # Path to list of sites to test
 ```
+`sites.csv` should contain `URL,regexp` pairs. Regexp is matched against
+URL's returned content.
+
+### Setup with Aiven cloud
 
 To get keys from Aiven cloud use `avn` command for example
 ```
@@ -34,7 +38,7 @@ avn service user-creds-download --username avnadmin kafka-1 -d config/keys/kafka
 cp config/keys/kafka/ca.pem config/keys/pg/
 ```
 Be sure to double check user name in `user-creds-download` command 
-as it does not check whether user with that name exist and succeeds anyway.
+as it does not verify whether user with that name exist and may fail silently.
 
 Unfortunately for Postgres it is not supported. So you have to copy database 
 user password from database's service admin page into `config/keys/pg/pk.key`.
@@ -42,8 +46,10 @@ user password from database's service admin page into `config/keys/pg/pk.key`.
 
 ## Build and run
 
-Tor run in a Docker container add user and service keys to `config/keys`
-as described above then run `./run.sh`.
+To run in a Docker container add user and service keys to `config/keys`
+as described above then run `./run.sh` to launch it, or `./test.sh`
+to do integration tests.
+
 
 If you run directly on your machine install python prerequisites
 and `libpq-dev` system package, e.g.:

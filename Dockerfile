@@ -12,5 +12,5 @@ RUN apk add postgresql-libs \
 COPY src ./src
 
 VOLUME /app/config
-
-CMD python ./src/main.py
+ENV PYTHONPATH = $PYTHONPATH:src
+CMD python -m main

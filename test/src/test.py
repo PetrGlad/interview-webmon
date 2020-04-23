@@ -2,6 +2,7 @@ import sys
 import time
 from multiprocessing import Process
 from pprint import pprint
+import http.client
 
 import psycopg2
 import toml
@@ -58,25 +59,32 @@ def normalize_status(row):
 
 def test_proc(db_config, delay):
     print("Awaiting probes.")
-    start_at = time.time()
-    time.sleep(delay * 3 + 7)  # 2 cycles + some time for in-flight messages to settle
+    start_at = time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(time.time()))
+    time.sleep(delay * 3 + 10)  # 2 cycles + some time for in-flight messages to settle
 
     def check_statuses(cur):
-        print("Checking db results.")
+        print(f"Checking db results after {start_at}.")
         cur.execute("SELECT url, code, duration, match FROM web_status where timestamp >= %s",
-                    (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_at)),))
+                    (start_at,))
         rows = [row for row in cur]
         print(f"Received {len(rows)} records.")
         results = set([normalize_status(r) for r in rows])
         print("Normalized results:")
         pprint(results)
-        return results == {('http://10.0.0.5:12321/fast', 0, True, False),  # No connection
-                           ('http://10.0.0.5:8080/fast', 200, False, True),  # OK
-                           ('http://10.0.0.5:8080/hello', 200, False, False),  # Content mismatch
-                           ('http://10.0.0.5:8080/never', 0, True, False),  # Timeout
-                           ('http://10.0.0.5:8080/newverland', 404, False, False),  # 404
-                           ('http://10.0.0.5:8080/slow', 200, True, True)  # Slow
-                           }
+        expecting = {('http://10.0.0.5:12321/fast', 0, True, False),  # No connection
+                     ('http://10.0.0.5:8080/fast', 200, False, True),  # OK
+                     ('http://10.0.0.5:8080/hello', 200, False, False),  # Content mismatch
+                     ('http://10.0.0.5:8080/never', 0, True, False),  # Timeout
+                     ('http://10.0.0.5:8080/newverland', 404, False, False),  # 404
+                     ('http://10.0.0.5:8080/slow', 200, True, True)  # Slow
+                     }
+        print("Expecting:")
+        pprint(expecting)
+        # It could be possible to compare wit '==' to potentially detect more problems.
+        # But flask is not available immediately, which is already recorded by probe.
+        # Also there may be other probes running.
+        # A reliable implementation of '==' comparison would be more complex.
+        return len(expecting.difference(results)) == 0
 
     return with_db_connection(db_config, check_statuses)
 

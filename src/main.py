@@ -2,14 +2,13 @@ import asyncio
 import csv
 import json
 import logging
-import re
 import time
-
-import aiohttp
 import aiopg
 import toml
-from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient, TopicPartition
+from kafka import KafkaConsumer, KafkaAdminClient, TopicPartition
 from kafka.admin import NewTopic
+
+import webprobe
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -24,51 +23,12 @@ def load_lines(file_name):
         return f.readlines()
 
 
-async def check_url(url, expect_regex, delay):
-    async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=min(delay, 10.0))) as session:
-        start_at = time.time()
-        try:
-            async with session.get(url) as response:  # Not following redirects
-                content = await response.text()
-                status = {'url': url,
-                          'code': response.status,
-                          'duration': time.time() - start_at,
-                          'match': bool(re.search(expect_regex, content)),
-                          'timestamp': time.time()}
-                log.debug(f"New status {status}.")
-                return status
-        except Exception as ex:
-            log.info(f"Probe exception for \"{url}\": {ex}.")
-            return {'url': url,
-                    'code': 0,
-                    'duration': time.time() - start_at,
-                    'match': False,
-                    'timestamp': time.time()}
-
-
-async def http_checker(sites_config, delay, web_status_topic, kafka_config):
-    sender = KafkaProducer(**kafka_config, client_id='status-logger-1', acks=1)
-
-    async def check(site):
-        status = await check_url(site['url'], site['expect_regex'], delay)
-        sender.send(web_status_topic, value=json.dumps(status).encode('utf-8'))  # Note: this is blocking
-
-    try:
-        while True:  # Until the process is interrupted
-            await asyncio.gather(*[check(site) for site in sites_config])
-            sender.flush()
-            await asyncio.sleep(delay)
-    finally:
-        sender.close()
-
-
 def create_kafka_config(mq_config):
-    kafka_config = mq_config.copy()
-    kafka_config['api_version'] = parse_version(mq_config['api_version'])
-    kafka_config['security_protocol'] = 'SSL'
-    kafka_config['ssl_check_hostname'] = True
-    return kafka_config
+    conf = mq_config.copy()
+    conf['api_version'] = parse_version(mq_config['api_version'])
+    conf['security_protocol'] = 'SSL'
+    conf['ssl_check_hostname'] = True
+    return conf
 
 
 def configure_kafka_broker(kafka_config, topic):
@@ -115,14 +75,16 @@ async def store_batch(cursor, messages):
             status: dict = json.loads(msg.value)
             log.info(f"Got status {status}.")
             await cursor.execute(
-                f"insert into {web_status_table} (timestamp, url, code, duration, match) values (%s, %s, %s, %s, %s)",
-                (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(status['timestamp'])),
+                f"insert into {web_status_table} (timestamp, url, code, duration, match)"
+                f" values (%s, %s, %s, %s, %s)"
+                f" on conflict (timestamp, url) do nothing",  # Re-feeding or duplicate URL in config
+                (time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime(status['timestamp'])),
                  status['url'],
                  status['code'],
                  status['duration'],
                  status['match']))
         except Exception as ex:
-            log.error("Cannot process incoming message % : %", msg, ex)
+            log.error("Cannot store incoming status %s : %s %s", msg, type(ex), ex)
 
 
 async def with_db_connection(db_config, proc):
@@ -136,7 +98,9 @@ async def with_db_connection(db_config, proc):
 
 
 async def status_archiver(kafka_config, topic, db_config):
-    consumer = KafkaConsumer(**kafka_config, client_id='webmon-1')
+    consumer = KafkaConsumer(**kafka_config,
+                             client_id='webmon-1',
+                             group_id='status-archiver')  # group_id also enables consumer auto commit
     consumer.assign([TopicPartition(topic, 0)])
     partition_key = TopicPartition(topic='web-status', partition=0)
 
@@ -148,6 +112,7 @@ async def status_archiver(kafka_config, topic, db_config):
             else:
                 messages = messages[partition_key]
                 await store_batch(cursor, messages)
+                consumer.commit()
 
     await with_db_connection(db_config, store_loop)
 
@@ -164,6 +129,6 @@ if __name__ == '__main__':
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(asyncio.gather(
-        http_checker(sites_config, delay, web_status_topic, kafka_config),
+        webprobe.http_checker(sites_config, delay, web_status_topic, kafka_config),
         status_archiver(kafka_config, web_status_topic, config['db'])
     ))

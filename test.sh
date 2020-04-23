@@ -25,10 +25,15 @@ docker run \
   --ip 10.0.0.3 \
   --network webmon-sandbox \
   webmon:sample
-docker run \
+
+if ! docker run \
   --rm \
   --name webmon-test \
   --volume "$(pwd)/test_config":/app/config \
   --ip 10.0.0.5 \
   --network webmon-sandbox \
   webmon-test
+then
+  docker logs webmon-sample
+  exit 1
+fi
